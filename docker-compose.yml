@@ -1,0 +1,302 @@
+x-mediapulse-common: &mediapulse-common
+  build: .
+  env_file: .env
+  depends_on:
+    minio:
+      condition: service_healthy
+    kafka:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+  networks:
+    - mediapulse
+
+services:
+
+  # ===========================================
+  # Infrastructure
+  # ===========================================
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    networks:
+      - mediapulse
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    networks:
+      - mediapulse
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mediapulse
+    volumes:
+      - minio-data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mediapulse
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./warehouse/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+
+  # ===========================================
+  # Application Services
+  # ===========================================
+
+  init-buckets:
+    <<: *mediapulse-common
+    command: python -m storage.setup_buckets
+    restart: "no"
+
+  batch-scraper:
+    <<: *mediapulse-common
+    command: >
+      python -c "
+      from scrapers.runner import run_all_spiders
+      from processing.bronze.raw_writer import write_raw_article
+      from ingestion.publishers.kafka import KafkaPublisher
+      from quality.validator import validate_article
+      from storage.minio_storage import MinIOStorage
+
+      storage = MinIOStorage()
+      publisher = KafkaPublisher()
+      articles = run_all_spiders()
+      for a in articles:
+          report = validate_article(a)
+          if report.passed:
+              write_raw_article(a, storage)
+              publisher.publish(a)
+      publisher.close()
+      print(f'Batch scrape done: {len(articles)} articles')
+      "
+    depends_on:
+      init-buckets:
+        condition: service_completed_successfully
+
+  stream-consumer:
+    <<: *mediapulse-common
+    command: >
+      python -c "
+      from ingestion.consumers.kafka import KafkaConsumer
+      from processing.silver.pipeline import process_to_silver
+      from storage.minio_storage import MinIOStorage
+
+      storage = MinIOStorage()
+      consumer = KafkaConsumer()
+      for article in consumer.consume():
+          process_to_silver(article, storage)
+      "
+    depends_on:
+      init-buckets:
+        condition: service_completed_successfully
+    restart: always
+
+  gold-aggregator:
+    <<: *mediapulse-common
+    command: >
+      python -c "
+      from ingestion.serializers.article import bytes_to_article
+      from processing.gold.pipeline import process_to_gold
+      from storage.minio_storage import MinIOStorage
+
+      storage = MinIOStorage()
+      keys = storage.list_keys('silver')
+      articles = [bytes_to_article(storage.read('silver', k)) for k in keys]
+      process_to_gold(articles, storage)
+      print(f'Gold aggregation done: {len(articles)} articles')
+      "
+    depends_on:
+      init-buckets:
+        condition: service_completed_successfully
+
+  warehouse-loader:
+    <<: *mediapulse-common
+    command: >
+      python -c "
+      import json
+      from processing.gold.trend_aggregator import TrendRecord
+      from processing.gold.topic_extractor import TopicRecord
+      from storage.minio_storage import MinIOStorage
+      from warehouse.connection import get_connection
+      from warehouse.repositories.articles import ArticleRepository
+      from warehouse.repositories.trends import TrendRepository
+      from warehouse.repositories.topics import TopicRepository
+      from ingestion.serializers.article import bytes_to_article
+
+      storage = MinIOStorage()
+      conn = get_connection()
+
+      # Load articles
+      repo = ArticleRepository(conn)
+      repo.create_table()
+      for key in storage.list_keys('silver'):
+          article = bytes_to_article(storage.read('silver', key))
+          repo.upsert(article)
+
+      # Load trends
+      if storage.exists('gold', 'trends.json'):
+          trends_repo = TrendRepository(conn)
+          trends_repo.create_table()
+          for r in json.loads(storage.read('gold', 'trends.json')):
+              trends_repo.upsert(TrendRecord(**r))
+
+      # Load topics
+      if storage.exists('gold', 'topics.json'):
+          topics_repo = TopicRepository(conn)
+          topics_repo.create_table()
+          topics_repo.replace_all([TopicRecord(**r) for r in json.loads(storage.read('gold', 'topics.json'))])
+
+      conn.close()
+      print('Warehouse load done')
+      "
+
+  # ===========================================
+  # Orchestration
+  # ===========================================
+
+  airflow-webserver:
+    image: apache/airflow:2.9.3-python3.11
+    command: >
+      bash -c "airflow db migrate && airflow users create --username admin --password admin
+      --firstname Admin --lastname User --role Admin --email admin@mediapulse.local || true
+      && airflow webserver"
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    volumes:
+      - ./orchestration/dags:/opt/airflow/dags
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mediapulse
+
+  airflow-scheduler:
+    image: apache/airflow:2.9.3-python3.11
+    command: airflow scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    volumes:
+      - ./orchestration/dags:/opt/airflow/dags
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mediapulse
+
+  # ===========================================
+  # Visualization
+  # ===========================================
+
+  metabase:
+    image: metabase/metabase:latest
+    ports:
+      - "3000:3000"
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: postgres
+      MB_DB_PORT: 5432
+      MB_DB_DBNAME: ${POSTGRES_DB}
+      MB_DB_USER: ${POSTGRES_USER}
+      MB_DB_PASS: ${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mediapulse
+
+  # ===========================================
+  # Monitoring
+  # ===========================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    networks:
+      - mediapulse
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+    networks:
+      - mediapulse
+
+networks:
+  mediapulse:
+    driver: bridge
+
+volumes:
+  zookeeper-data:
+  kafka-data:
+  minio-data:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
