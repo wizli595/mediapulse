@@ -1,0 +1,164 @@
+# MediaPulse — Data Catalog & Governance
+
+metadata:
+  project: MediaPulse
+  version: "1.0"
+  owner: mediapulse-team
+  description: Big Data platform for news article collection and trend analysis
+
+# =============================================
+# Data Sources
+# =============================================
+sources:
+  moroccan:
+    - name: hespress
+      url: https://www.hespress.com
+      language: ar
+      type: web_scraping
+    - name: akhbarona
+      url: https://www.akhbarona.com
+      language: ar
+      type: web_scraping
+    - name: lakom
+      url: https://lakome2.com
+      language: ar
+      type: web_scraping
+    - name: barlamane
+      url: https://www.barlamane.com
+      language: ar/fr
+      type: web_scraping
+
+  international:
+    - name: aljazeera
+      url: https://www.aljazeera.com
+      language: en
+      type: web_scraping
+    - name: bbc
+      url: https://www.bbc.com
+      language: en
+      type: web_scraping
+    - name: cnn
+      url: https://edition.cnn.com
+      language: en
+      type: web_scraping
+    - name: reuters
+      url: https://www.reuters.com
+      language: en
+      type: web_scraping
+
+# =============================================
+# Data Layers (Medallion Architecture)
+# =============================================
+layers:
+  bronze:
+    storage: MinIO bucket "bronze"
+    format: JSON
+    description: Raw scraped articles, no transformation
+    retention: indefinite
+    key_pattern: "{source}/{YYYY}/{MM}/{DD}/{article_id}.json"
+
+  silver:
+    storage: MinIO bucket "silver"
+    format: JSON
+    description: Cleaned and normalized articles
+    transformations:
+      - strip_html: Remove HTML tags and decode entities
+      - normalize_text: Unicode normalization, collapse whitespace
+      - detect_language: ISO 639-1 language code
+      - deduplicate: Skip articles already in silver (by article_id)
+    key_pattern: "{source}/{YYYY}/{MM}/{DD}/{article_id}.json"
+
+  gold:
+    storage: MinIO bucket "gold"
+    format: JSON
+    description: Aggregated analytics ready for warehouse
+    outputs:
+      - trends.json: Article count by date + source + category
+      - topics.json: Top 50 keywords by frequency
+      - sources.json: Total article count per source
+
+# =============================================
+# Data Warehouse Tables
+# =============================================
+warehouse:
+  engine: PostgreSQL
+  tables:
+    articles:
+      description: All cleaned articles (from silver)
+      primary_key: article_id
+      indexes: [source, published_at, category]
+      row_count: grows daily
+
+    trends:
+      description: Article counts by date, source, category
+      primary_key: id
+      unique_constraint: [date, source, category]
+      refresh: full reload from gold every 2 hours
+
+    topics:
+      description: Most frequent keywords across all articles
+      primary_key: id
+      refresh: full replace from gold every 2 hours
+
+    source_counts:
+      description: Total articles per source
+      primary_key: source
+      refresh: full replace from gold every 2 hours
+
+# =============================================
+# Data Quality Rules
+# =============================================
+quality:
+  checks:
+    - name: title_present
+      dimension: completeness
+      rule: Article title must not be empty
+    - name: date_present
+      dimension: completeness
+      rule: Publication date must not be null
+    - name: content_length
+      dimension: validity
+      rule: Content must be at least 50 characters
+    - name: url_valid
+      dimension: consistency
+      rule: URL must have http/https scheme and valid host
+
+# =============================================
+# Pipeline Lineage
+# =============================================
+lineage:
+  flow:
+    - step: 1. Scraping
+      input: News websites (HTML)
+      output: Article objects
+      tool: Scrapy spiders (Python)
+
+    - step: 2. Ingestion
+      input: Article objects
+      output: Kafka messages / JSONL files
+      tool: KafkaPublisher / FilePublisher
+
+    - step: 3. Bronze
+      input: Article objects
+      output: MinIO bronze/{source}/{date}/{id}.json
+      tool: raw_writer.py
+
+    - step: 4. Silver
+      input: Bronze JSON files
+      output: MinIO silver/{source}/{date}/{id}.json
+      tool: silver/pipeline.py (strip_html -> normalize -> detect_lang -> dedup)
+
+    - step: 5. Gold
+      input: Silver JSON files
+      output: MinIO gold/trends.json, topics.json, sources.json
+      tool: gold/pipeline.py (aggregate)
+
+    - step: 6. Warehouse
+      input: Gold JSON files
+      output: PostgreSQL tables
+      tool: warehouse/repositories
+
+    - step: 7. Visualization
+      input: PostgreSQL tables
+      output: Metabase dashboards
+      tool: Metabase SQL queries
