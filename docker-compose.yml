@@ -119,102 +119,43 @@ services:
 
   batch-scraper:
     <<: *mediapulse-common
-    command: >
-      python -c "
-      from scrapers.runner import run_all_spiders
-      from processing.bronze.raw_writer import write_raw_article
-      from ingestion.publishers.kafka import KafkaPublisher
-      from quality.validator import validate_article
-      from storage.minio_storage import MinIOStorage
-
-      storage = MinIOStorage()
-      publisher = KafkaPublisher()
-      articles = run_all_spiders()
-      for a in articles:
-          report = validate_article(a)
-          if report.passed:
-              write_raw_article(a, storage)
-              publisher.publish(a)
-      publisher.close()
-      print(f'Batch scrape done: {len(articles)} articles')
-      "
+    command: python -m scripts.batch_scrape
     depends_on:
       init-buckets:
         condition: service_completed_successfully
 
   stream-consumer:
     <<: *mediapulse-common
-    command: >
-      python -c "
-      from ingestion.consumers.kafka import KafkaConsumer
-      from processing.silver.pipeline import process_to_silver
-      from storage.minio_storage import MinIOStorage
-
-      storage = MinIOStorage()
-      consumer = KafkaConsumer()
-      for article in consumer.consume():
-          process_to_silver(article, storage)
-      "
+    command: python -m scripts.consume_stream
     depends_on:
       init-buckets:
         condition: service_completed_successfully
     restart: always
 
+  bronze-to-silver:
+    <<: *mediapulse-common
+    command: python -m scripts.bronze_to_silver
+    depends_on:
+      init-buckets:
+        condition: service_completed_successfully
+
   gold-aggregator:
     <<: *mediapulse-common
-    command: >
-      python -c "
-      from ingestion.serializers.article import bytes_to_article
-      from processing.gold.pipeline import process_to_gold
-      from storage.minio_storage import MinIOStorage
-
-      storage = MinIOStorage()
-      keys = storage.list_keys('silver')
-      articles = [bytes_to_article(storage.read('silver', k)) for k in keys]
-      process_to_gold(articles, storage)
-      print(f'Gold aggregation done: {len(articles)} articles')
-      "
+    command: python -m scripts.silver_to_gold
     depends_on:
       init-buckets:
         condition: service_completed_successfully
 
   warehouse-loader:
     <<: *mediapulse-common
-    command: >
-      python -c "
-      import json
-      from processing.gold.trend_aggregator import TrendRecord
-      from processing.gold.topic_extractor import TopicRecord
-      from storage.minio_storage import MinIOStorage
-      from warehouse.connection import get_connection
-      from warehouse.repositories.articles import ArticleRepository
-      from warehouse.repositories.trends import TrendRepository
-      from warehouse.repositories.topics import TopicRepository
-      from ingestion.serializers.article import bytes_to_article
+    command: python -m scripts.gold_to_warehouse
 
-      storage = MinIOStorage()
-      conn = get_connection()
-
-      repo = ArticleRepository(conn)
-      repo.create_table()
-      for key in storage.list_keys('silver'):
-          article = bytes_to_article(storage.read('silver', key))
-          repo.upsert(article)
-
-      if storage.exists('gold', 'trends.json'):
-          trends_repo = TrendRepository(conn)
-          trends_repo.create_table()
-          for r in json.loads(storage.read('gold', 'trends.json')):
-              trends_repo.upsert(TrendRecord(**r))
-
-      if storage.exists('gold', 'topics.json'):
-          topics_repo = TopicRepository(conn)
-          topics_repo.create_table()
-          topics_repo.replace_all([TopicRecord(**r) for r in json.loads(storage.read('gold', 'topics.json'))])
-
-      conn.close()
-      print('Warehouse load done')
-      "
+  full-pipeline:
+    <<: *mediapulse-common
+    command: python -m scripts.run_full_pipeline
+    depends_on:
+      init-buckets:
+        condition: service_completed_successfully
 
   # ===========================================
   # Orchestration (Airflow)

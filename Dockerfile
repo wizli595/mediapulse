@@ -12,6 +12,7 @@ COPY storage/ storage/
 COPY processing/ processing/
 COPY quality/ quality/
 COPY warehouse/ warehouse/
+COPY scripts/ scripts/
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
