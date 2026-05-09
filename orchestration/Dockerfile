@@ -14,5 +14,6 @@ COPY storage/ /opt/airflow/storage/
 COPY processing/ /opt/airflow/processing/
 COPY quality/ /opt/airflow/quality/
 COPY warehouse/ /opt/airflow/warehouse/
+COPY scripts/ /opt/airflow/scripts/
 
 ENV PYTHONPATH=/opt/airflow
