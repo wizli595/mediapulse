@@ -193,14 +193,42 @@ services:
         condition: service_completed_successfully
 
   # ===========================================
-  # Visualization (Metabase)
+  # Dashboard (React + FastAPI)
+  # ===========================================
+
+  dashboard-api:
+    build:
+      context: .
+      dockerfile: dashboard/backend/Dockerfile
+    container_name: mediapulse-dashboard-api
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mediapulse
+
+  dashboard-ui:
+    build: dashboard/frontend
+    container_name: mediapulse-dashboard
+    ports:
+      - "3000:80"
+    depends_on:
+      - dashboard-api
+    networks:
+      - mediapulse
+
+  # ===========================================
+  # Visualization (Metabase - optional)
   # ===========================================
 
   metabase:
     image: metabase/metabase:latest
     container_name: mediapulse-metabase
     ports:
-      - "3000:3000"
+      - "3002:3000"
     environment:
       MB_DB_TYPE: postgres
       MB_DB_HOST: postgres
