@@ -11,6 +11,25 @@ x-mediapulse-common: &mediapulse-common
   networks:
     - mediapulse
 
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: orchestration/Dockerfile
+  env_file: .env
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+    AIRFLOW__WEBSERVER__SECRET_KEY: mediapulse-secret-key
+  volumes:
+    - ./orchestration/dags:/opt/airflow/dags
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks:
+    - mediapulse
+
 services:
 
   # ===========================================
@@ -50,6 +69,7 @@ services:
 
   minio:
     image: minio/minio:latest
+    container_name: mediapulse-minio
     command: server /data --console-address ":9001"
     ports:
       - "9000:9000"
@@ -69,6 +89,7 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    container_name: mediapulse-postgres
     ports:
       - "5432:5432"
     environment:
@@ -84,6 +105,7 @@ services:
       - mediapulse
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./warehouse/init-databases.sh:/docker-entrypoint-initdb.d/00-init-databases.sh
       - ./warehouse/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
 
   # ===========================================
@@ -173,21 +195,18 @@ services:
       storage = MinIOStorage()
       conn = get_connection()
 
-      # Load articles
       repo = ArticleRepository(conn)
       repo.create_table()
       for key in storage.list_keys('silver'):
           article = bytes_to_article(storage.read('silver', key))
           repo.upsert(article)
 
-      # Load trends
       if storage.exists('gold', 'trends.json'):
           trends_repo = TrendRepository(conn)
           trends_repo.create_table()
           for r in json.loads(storage.read('gold', 'trends.json')):
               trends_repo.upsert(TrendRecord(**r))
 
-      # Load topics
       if storage.exists('gold', 'topics.json'):
           topics_repo = TopicRepository(conn)
           topics_repo.create_table()
@@ -198,59 +217,57 @@ services:
       "
 
   # ===========================================
-  # Orchestration
+  # Orchestration (Airflow)
   # ===========================================
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command: >
+      -c "airflow db migrate &&
+      airflow users create
+        --username admin
+        --password admin
+        --firstname Admin
+        --lastname User
+        --role Admin
+        --email admin@mediapulse.local || true"
+    restart: "no"
 
   airflow-webserver:
-    image: apache/airflow:2.9.3-python3.11
-    command: >
-      bash -c "airflow db migrate && airflow users create --username admin --password admin
-      --firstname Admin --lastname User --role Admin --email admin@mediapulse.local || true
-      && airflow webserver"
+    <<: *airflow-common
+    command: airflow webserver
     ports:
       - "8080:8080"
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
-    volumes:
-      - ./orchestration/dags:/opt/airflow/dags
     depends_on:
       postgres:
         condition: service_healthy
-    networks:
-      - mediapulse
+      airflow-init:
+        condition: service_completed_successfully
 
   airflow-scheduler:
-    image: apache/airflow:2.9.3-python3.11
+    <<: *airflow-common
     command: airflow scheduler
-    environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
-    volumes:
-      - ./orchestration/dags:/opt/airflow/dags
     depends_on:
       postgres:
         condition: service_healthy
-    networks:
-      - mediapulse
+      airflow-init:
+        condition: service_completed_successfully
 
   # ===========================================
-  # Visualization
+  # Visualization (Metabase)
   # ===========================================
 
   metabase:
     image: metabase/metabase:latest
+    container_name: mediapulse-metabase
     ports:
       - "3000:3000"
     environment:
       MB_DB_TYPE: postgres
       MB_DB_HOST: postgres
       MB_DB_PORT: 5432
-      MB_DB_DBNAME: ${POSTGRES_DB}
+      MB_DB_DBNAME: metabase
       MB_DB_USER: ${POSTGRES_USER}
       MB_DB_PASS: ${POSTGRES_PASSWORD}
     depends_on:
@@ -265,6 +282,7 @@ services:
 
   prometheus:
     image: prom/prometheus:latest
+    container_name: mediapulse-prometheus
     ports:
       - "9090:9090"
     volumes:
@@ -275,6 +293,7 @@ services:
 
   grafana:
     image: grafana/grafana:latest
+    container_name: mediapulse-grafana
     ports:
       - "3001:3000"
     environment:
