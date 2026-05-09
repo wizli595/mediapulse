@@ -1,6 +1,12 @@
-# MediaPulse
+<p align="center">
+  <img src="docs/logo.png" alt="MediaPulse" width="250">
+</p>
 
-Plateforme Big Data de collecte et d'analyse d'articles de presse pour identifier les tendances médiatiques.
+<h1 align="center">MediaPulse</h1>
+
+<p align="center">
+  Plateforme Big Data de collecte et d'analyse d'articles de presse pour identifier les tendances médiatiques.
+</p>
 
 ## Architecture
 
