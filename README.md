@@ -10,26 +10,17 @@
 
 ## Architecture
 
-![Architecture MediaPulse](docs/architecture-diagram.png)
-
-```
-[News Sites] ──► Scrapy Spiders ──► Kafka ──► MinIO (Data Lake)
-                                                    │
-                                        ┌───────────┴───────────┐
-                                        │                       │
-                                   Bronze (brut)           Bronze (brut)
-                                        │                       │
-                                   Silver (nettoyé)        Silver (nettoyé)
-                                        │                       │
-                                   Gold (agrégé)           Gold (agrégé)
-                                        │                       │
-                                   PostgreSQL              PostgreSQL
-                                        │                       │
-                                   Metabase               Metabase
-                                   (Dashboards)           (Dashboards)
-```
+![Architecture MediaPulse](docs/images/flow.png)
 
 **Architecture Médaillon (Bronze / Silver / Gold)** sur MinIO, orchestrée par Airflow, monitorée par Prometheus + Grafana.
+
+## Structure du projet
+
+![Structure du projet](docs/images/ffolder-structure.png)
+
+## Dashboard
+
+![Dashboard MediaPulse](docs/images/dashboard-ui.png)
 
 ## Sources d'actualité
 
@@ -100,8 +91,10 @@ docker exec mediapulse-postgres psql -U mediapulse -d mediapulse \
 
 | Service | URL | Identifiants |
 |---------|-----|-------------|
+| Dashboard | http://localhost:3000 | — |
+| Dashboard API | http://localhost:8000 | — |
 | Airflow | http://localhost:8080 | `admin` / `admin` |
-| Metabase | http://localhost:3000 | Assistant de configuration |
+| Metabase | http://localhost:3002 | Assistant de configuration |
 | MinIO Console | http://localhost:9001 | `mediapulse` / `changeme123` |
 | Grafana | http://localhost:3001 | `admin` / `admin` |
 | Prometheus | http://localhost:9090 | Pas d'authentification |
@@ -126,29 +119,6 @@ PYTHONPATH=. pytest tests/ -v
 ```
 
 56 tests couvrant tous les modules.
-
-## Structure du projet
-
-```
-mediapulse/
-├── shared/              # Modèles, config, exceptions, logging
-├── scrapers/            # 8 spiders + registre + runner
-├── ingestion/           # Kafka publisher/consumer + sérialiseurs
-├── storage/             # MinIO + LocalStorage abstractions
-├── processing/          # Bronze → Silver → Gold (médaillon)
-├── quality/             # 4 checks de qualité des données
-├── warehouse/           # PostgreSQL schema + repositories
-├── orchestration/       # 4 DAGs Airflow
-├── scripts/             # Entrypoints Docker pour le pipeline
-├── visualization/       # Requêtes SQL Metabase
-├── governance/          # Catalogue de données + lignage
-├── monitoring/          # Prometheus + Grafana configs
-├── tests/               # 56 tests unitaires
-├── docs/                # Documentation technique
-├── docker-compose.yml   # 16 services
-├── Dockerfile           # Image de base
-└── requirements.txt     # Dépendances Python
-```
 
 ## Documentation
 
