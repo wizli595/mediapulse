@@ -1,11 +1,12 @@
 import { NavLink } from "react-router-dom";
+import { LayoutDashboard, TrendingUp, Newspaper, Key, FileText } from "lucide-react";
 
 const links = [
-  { to: "/", label: "Overview", icon: "📊" },
-  { to: "/trends", label: "Trends", icon: "📈" },
-  { to: "/sources", label: "Sources", icon: "📰" },
-  { to: "/keywords", label: "Keywords", icon: "🔑" },
-  { to: "/articles", label: "Articles", icon: "📝" },
+  { to: "/", label: "Overview", icon: LayoutDashboard },
+  { to: "/trends", label: "Trends", icon: TrendingUp },
+  { to: "/sources", label: "Sources", icon: Newspaper },
+  { to: "/keywords", label: "Keywords", icon: Key },
+  { to: "/articles", label: "Articles", icon: FileText },
 ];
 
 export default function Sidebar() {
@@ -22,7 +23,7 @@ export default function Sidebar() {
             to={l.to}
             className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
           >
-            <span className="nav-icon">{l.icon}</span>
+            <l.icon size={18} className="nav-icon" />
             {l.label}
           </NavLink>
         ))}
