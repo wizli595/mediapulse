@@ -4,6 +4,8 @@ Plateforme Big Data de collecte et d'analyse d'articles de presse pour identifie
 
 ## Architecture
 
+![Architecture MediaPulse](docs/architecture-diagram.png)
+
 ```
 [News Sites] ──► Scrapy Spiders ──► Kafka ──► MinIO (Data Lake)
                                                     │
