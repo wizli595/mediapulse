@@ -16,7 +16,11 @@ def _get_session() -> requests.Session:
     global _SESSION
     if _SESSION is None:
         _SESSION = requests.Session()
-        _SESSION.headers.update({"User-Agent": config.scraper.user_agent})
+        _SESSION.headers.update({
+            "User-Agent": config.scraper.user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,ar;q=0.8,fr;q=0.7",
+        })
     return _SESSION
 
 

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from scrapers.base import AbstractSpider
-from scrapers.fetcher import fetch_and_parse
+from scrapers.fetcher import fetch_and_parse, fetch_html, parse_html
 from shared.exceptions import ScrapingError
 from shared.logging import get_logger
 from shared.models import Article
@@ -22,14 +23,18 @@ class ReutersSpider(AbstractSpider):
         return "https://www.reuters.com"
 
     def get_article_urls(self) -> list[str]:
-        soup = fetch_and_parse(self.base_url)
         urls: set[str] = set()
+        sections = ("world", "business", "markets", "technology", "sports")
 
-        sections = ("/world/", "/business/", "/markets/", "/technology/", "/sports/")
-        for link in soup.select("a[href]"):
-            href = link.get("href", "")
-            if any(href.startswith(s) for s in sections):
-                urls.add(self.base_url + href)
+        try:
+            xml = fetch_html(f"{self.base_url}/arc/outboundfeeds/news-sitemap/?outputType=xml")
+            soup = parse_html(xml)
+            for loc in soup.select("url loc"):
+                href = loc.get_text(strip=True)
+                if any(f"/{s}/" in href for s in sections):
+                    urls.add(href)
+        except ScrapingError:
+            _log.warning("Failed to fetch reuters sitemap")
 
         _log.info("Found %d article URLs on %s", len(urls), self.name)
         return list(urls)

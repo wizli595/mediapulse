@@ -50,8 +50,11 @@ class AbstractSpider(ABC):
         for script in soup.select('script[type="application/ld+json"]'):
             try:
                 data = json.loads(script.string)
-                if data.get("@type") == target_type:
-                    return data
+                # Handle both single objects and arrays of objects
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if isinstance(item, dict) and item.get("@type") == target_type:
+                        return item
             except (json.JSONDecodeError, TypeError):
                 continue
         return None
