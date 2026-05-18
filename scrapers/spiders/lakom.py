@@ -27,9 +27,16 @@ class LakomSpider(AbstractSpider):
 
         for link in soup.select("a[href]"):
             href = link.get("href", "")
-            if "/detail/" in href or "/article/" in href:
-                full = href if href.startswith("http") else self.base_url + href
-                urls.add(full)
+            # Match article URLs like /slug-name/ (not categories or static pages)
+            if href.startswith(self.base_url + "/") and href != self.base_url + "/":
+                path = href.replace(self.base_url, "").strip("/")
+                # Skip category and tag pages, keep article slugs
+                if path and "/" not in path and path not in ("category", "tag", "author", "page"):
+                    urls.add(href)
+            elif href.startswith("/") and not href.startswith("/category") and not href.startswith("/tag") and not href.startswith("/page") and not href.startswith("/author"):
+                path = href.strip("/")
+                if path and "/" not in path:
+                    urls.add(self.base_url + href)
 
         _log.info("Found %d article URLs on %s", len(urls), self.name)
         return list(urls)

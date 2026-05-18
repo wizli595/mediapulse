@@ -28,7 +28,8 @@ class CNNSpider(AbstractSpider):
 
         for link in soup.select("a[href]"):
             href = link.get("href", "")
-            if re.search(r"/\d{4}/\d{2}/\d{2}/", href) and "/index.html" in href:
+            # CNN dropped /index.html — now uses /YYYY/MM/DD/section/slug pattern
+            if re.search(r"/\d{4}/\d{2}/\d{2}/", href):
                 full = href if href.startswith("http") else self.base_url + href
                 urls.add(full)
 

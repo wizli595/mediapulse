@@ -27,9 +27,21 @@ class BarlamaneSpider(AbstractSpider):
 
         for link in soup.select("a[href]"):
             href = link.get("href", "")
-            if self.base_url in href and href != self.base_url + "/":
-                if any(seg.isdigit() for seg in href.rstrip("/").split("/")):
-                    urls.add(href)
+            # barlamane.com uses encoded Arabic slugs without numeric segments
+            if ("barlamane.com/" in href
+                    and href not in (self.base_url + "/", "https://barlamane.com/")
+                    and "/category/" not in href
+                    and "/tag/" not in href
+                    and "/page/" not in href
+                    and "/fr/" not in href
+                    and "barlamaneradio" not in href
+                    and "barlamanesport" not in href
+                    and "wadifa" not in href):
+                # Only article slugs (contain encoded Arabic or long paths)
+                path = href.split("barlamane.com/")[-1].strip("/")
+                if path and "%" in path:
+                    full = href if href.startswith("http") else "https://barlamane.com/" + path
+                    urls.add(full)
 
         _log.info("Found %d article URLs on %s", len(urls), self.name)
         return list(urls)

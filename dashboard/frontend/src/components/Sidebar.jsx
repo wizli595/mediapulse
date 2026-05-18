@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, TrendingUp, Newspaper, Key, FileText } from "lucide-react";
+import { LayoutDashboard, TrendingUp, Newspaper, Key, FileText, Server } from "lucide-react";
 
 const links = [
   { to: "/", label: "Overview", icon: LayoutDashboard },
@@ -7,6 +7,7 @@ const links = [
   { to: "/sources", label: "Sources", icon: Newspaper },
   { to: "/keywords", label: "Keywords", icon: Key },
   { to: "/articles", label: "Articles", icon: FileText },
+  { to: "/services", label: "Services", icon: Server },
 ];
 
 export default function Sidebar() {

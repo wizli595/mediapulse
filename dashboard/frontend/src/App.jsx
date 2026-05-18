@@ -5,6 +5,7 @@ import Trends from "./pages/Trends";
 import Sources from "./pages/Sources";
 import Keywords from "./pages/Keywords";
 import Articles from "./pages/Articles";
+import Services from "./pages/Services";
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
             <Route path="/sources" element={<Sources />} />
             <Route path="/keywords" element={<Keywords />} />
             <Route path="/articles" element={<Articles />} />
+            <Route path="/services" element={<Services />} />
           </Routes>
         </main>
       </div>

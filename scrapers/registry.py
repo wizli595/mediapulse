@@ -18,7 +18,7 @@ _SPIDERS: list[type[AbstractSpider]] = [
     AlJazeeraSpider,
     BBCSpider,
     CNNSpider,
-    ReutersSpider,
+    ReutersSpider,  # NOTE: Reuters blocks bot requests (401) — discovers URLs via sitemap but can't fetch articles
 ]
 
 
